@@ -45,7 +45,7 @@ jobs:
     - name: Install Linux dependencies
       if: runner.os == 'Linux'
       run: |
-        sudo apt install -y swig libpython3-dev libsasl2-dev libjsoncpp-dev softhsm2 opensc
+        sudo apt install -y swig libpython3-dev libsasl2-dev libjsoncpp-dev libc-ares-dev softhsm2 opensc
     - name: Install Windows dependencies
       if: runner.os == 'Windows'
       run: |

@@ -63,6 +63,7 @@
 #undef _GNU_SOURCE
 
 #include "epoll-internal.h"
+#include "epoll_name_lookup.h"
 #include "proactor-internal.h"
 #include "core/engine-internal.h"
 #include "core/logger_private.h"
@@ -630,6 +631,10 @@ static inline pconnection_t *task_pconnection(task_t *t) {
 
 static inline pn_listener_t *task_listener(task_t *t) {
   return t->type == LISTENER ? containerof(t, pn_listener_t, task) : NULL;
+}
+
+static inline pname_lookup_t *task_name_lookup(task_t *t) {
+  return t->type == NAME_LOOKUP ? containerof(t, pname_lookup_t, task) : NULL;
 }
 
 static pn_event_t *listener_batch_next(pn_event_batch_t *batch);
@@ -1408,15 +1413,6 @@ static void pconnection_maybe_connect_lh(pconnection_t *pc) {
   pc->disconnected = true;
 }
 
-int pgetaddrinfo(const char *host, const char *port, int flags, struct addrinfo **res)
-{
-  // NOTE: getaddrinfo can block on DNS lookup (PROTON-2812).
-  struct addrinfo hints = { 0 };
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_V4MAPPED | AI_ADDRCONFIG | flags;
-  return getaddrinfo(host, port, &hints, res);
-}
 
 static inline bool is_inactive(pn_proactor_t *p) {
   return (!p->tasks && !p->disconnects_pending && !p->timeout_set && !p->shutting_down);
@@ -1431,23 +1427,39 @@ bool schedule_if_inactive(pn_proactor_t *p) {
   return false;
 }
 
+/* Called when connection name lookup completes (from name_lookup done_cb). Call with task lock held. */
+static void connection_lookup_done_lh(pconnection_t *pc, struct addrinfo *ai, int gai_error) {
+  pn_proactor_t *p = pc->task.proactor;
+  bool notify = false;
+  if (gai_error) {
+    psocket_gai_error(&pc->psocket, gai_error, "connect to ");
+  } else if (ai) {
+    pc->addrinfo = ai;
+    pc->ai = ai;
+    pconnection_maybe_connect_lh(pc);
+    if (pc->psocket.epoll_io.fd != -1 && !pc->queued_disconnect && !pni_task_wake_pending(&pc->task)) {
+      return;
+    }
+  }
+  notify = schedule(&pc->task);
+  if (notify) notify_poller(p);
+}
+
+static void connection_done_cb(void *user_data, struct addrinfo *ai, int gai_error) {
+  pconnection_t *pc = (pconnection_t *)user_data;
+  lock(&pc->task.mutex);
+  connection_lookup_done_lh(pc, ai, gai_error);
+  unlock(&pc->task.mutex);
+}
+
 // Call from pconnection_process with task lock held.
 // Return true if the socket is connecting and there are no Proton events to deliver.
 static bool pconnection_first_connect_lh(pconnection_t *pc) {
+  pn_proactor_t *p = pc->task.proactor;
   unlock(&pc->task.mutex);
-  // TODO: move this step to a separate worker thread that scales in response to multiple blocking DNS lookups.
-  int gai_error = pgetaddrinfo(pc->host, pc->port, 0, &pc->addrinfo);
+  bool rc = pni_name_lookup_start(&p->name_lookup, pc->host, pc->port, pc, connection_done_cb);
   lock(&pc->task.mutex);
-
-  if (!gai_error) {
-    pc->ai = pc->addrinfo;
-    pconnection_maybe_connect_lh(pc); /* Start connection attempts */
-    if (pc->psocket.epoll_io.fd != -1 && !pc->queued_disconnect && !pni_task_wake_pending(&pc->task))
-      return true;
-  } else {
-    psocket_gai_error(&pc->psocket, gai_error, "connect to ");
-  }
-  return false;
+  return rc;
 }
 
 void pn_proactor_connect2(pn_proactor_t *p, pn_connection_t *c, pn_transport_t *t, const char *addr) {
@@ -1579,7 +1591,7 @@ void pn_proactor_listen(pn_proactor_t *p, pn_listener_t *l, const char *addr, in
   pni_parse_addr(addr, l->addr_buf, sizeof(l->addr_buf), &l->host, &l->port);
 
   struct addrinfo *addrinfo = NULL;
-  int gai_err = pgetaddrinfo(l->host, l->port, AI_PASSIVE | AI_ALL, &addrinfo);
+  int gai_err = pni_name_lookup_blocking(l->host, l->port, AI_PASSIVE | AI_ALL, &addrinfo);
   if (!gai_err) {
     /* Count addresses, allocate enough space for sockets */
     size_t len = 0;
@@ -2021,23 +2033,27 @@ pn_proactor_t *pn_proactor(void) {
   if ((p->epollfd = epoll_create(1)) >= 0) {
     if ((p->eventfd = eventfd(0, EFD_NONBLOCK)) >= 0) {
       if ((p->interruptfd = eventfd(0, EFD_NONBLOCK)) >= 0) {
-        if (pni_timer_manager_init(&p->timer_manager))
-          if ((p->collector = pn_collector()) != NULL) {
-            p->batch.next_event = &proactor_batch_next;
-            start_polling(&p->timer_manager.epoll_timer, p->epollfd);  // TODO: check for error
-            epoll_eventfd_init(&p->epoll_schedule, p->eventfd, p->epollfd, true);
-            epoll_eventfd_init(&p->epoll_interrupt, p->interruptfd, p->epollfd, false);
-            p->tslot_map = pn_hash(PN_VOID, 0, 0.75);
-            grow_poller_bufs(p);
-            p->ready_list_generation = 1;
-            return p;
+        if (pni_timer_manager_init(&p->timer_manager)) {
+          if (pni_name_lookup_init(&p->name_lookup, p)) {
+            if ((p->collector = pn_collector()) != NULL) {
+              p->batch.next_event = &proactor_batch_next;
+              start_polling(&p->timer_manager.epoll_timer, p->epollfd);  // TODO: check for error
+              epoll_eventfd_init(&p->epoll_schedule, p->eventfd, p->epollfd, true);
+              epoll_eventfd_init(&p->epoll_interrupt, p->interruptfd, p->epollfd, false);
+              p->tslot_map = pn_hash(PN_VOID, 0, 0.75);
+              grow_poller_bufs(p);
+              p->ready_list_generation = 1;
+              return p;
+            }
           }
+        }
       }
     }
   }
   if (p->epollfd >= 0) close(p->epollfd);
   if (p->eventfd >= 0) close(p->eventfd);
   if (p->interruptfd >= 0) close(p->interruptfd);
+  pni_name_lookup_cleanup(&p->name_lookup, p);
   pni_timer_manager_finalize(&p->timer_manager);
   pmutex_finalize(&p->timeout_mutex);
   pmutex_finalize(&p->tslot_mutex);
@@ -2071,11 +2087,15 @@ void pn_proactor_free(pn_proactor_t *p) {
      case RAW_CONNECTION:
       pni_raw_connection_forced_shutdown(pni_task_raw_connection(tsk));
       break;
+     case NAME_LOOKUP:
+      pni_name_lookup_forced_shutdown(task_name_lookup(tsk));
+      break;
      default:
       break;
     }
   }
 
+  pni_name_lookup_cleanup(&p->name_lookup, p);
   pni_timer_manager_finalize(&p->timer_manager);
   pn_collector_free(p->collector);
   pmutex_finalize(&p->timeout_mutex);
@@ -2309,6 +2329,11 @@ static pn_event_batch_t *process(task_t *tsk) {
     batch = pni_timer_manager_process(tm, timeout, tsk_ready);
     break;
   }
+  case NAME_LOOKUP:
+    unlock(&p->sched_mutex);
+    pni_name_lookup_process_events(&p->name_lookup);
+    batch = NULL;
+    break;
   default:
     assert(NULL);
   }
@@ -2350,6 +2375,11 @@ static task_t *post_event(pn_proactor_t *p, struct epoll_event *evp) {
     }
     // else if (ee->fd == p->eventfd)... schedule_ready_list already performed by poller task.
     break;
+  case NAME_LOOKUP_EPOLL: {
+    tsk = &p->name_lookup.task;
+    tsk->sched_pending = true;
+    break;
+  }
   case PCONNECTION_IO: {
     psocket_t *ps = containerof(ee, psocket_t, epoll_io);
     pconnection_t *pc = psocket_pconnection(ps);
@@ -2581,11 +2611,10 @@ static bool poller_do_epoll(struct pn_proactor_t* p, tslot_t *ts, bool can_block
       unlock(&p->eventfd_mutex);
     }
 
-    int timeout = (epoll_immediate) ? 0 : -1;
-    p->poller_suspended = (timeout == -1);
+    p->poller_suspended = !epoll_immediate;
     unlock(&p->sched_mutex);
 
-    n_events = epoll_wait(p->epollfd, p->kevents, p->kevents_capacity, timeout);
+    n_events = epoll_wait(p->epollfd, p->kevents, p->kevents_capacity, epoll_immediate ? 0 : -1);
 
     lock(&p->sched_mutex);
     p->poller_suspended = false;
@@ -2612,8 +2641,9 @@ static bool poller_do_epoll(struct pn_proactor_t* p, tslot_t *ts, bool can_block
     unlock(&p->eventfd_mutex);
 
     if (n_events < 0) {
-      if (errno != EINTR)
+      if (errno != EINTR) {
         perror("epoll_wait"); // TODO: proper log
+      }
       if (!can_block && !unpolled_work)
         return true;
       else
@@ -2622,8 +2652,9 @@ static bool poller_do_epoll(struct pn_proactor_t* p, tslot_t *ts, bool can_block
       if (!can_block && !unpolled_work)
         return true;
       else {
-        if (!epoll_immediate)
+        if (!epoll_immediate) {
           perror("epoll_wait unexpected timeout"); // TODO: proper log
+        }
         if (!unpolled_work)
           continue;
       }

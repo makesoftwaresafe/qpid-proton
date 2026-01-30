@@ -61,7 +61,8 @@ typedef enum {
   LISTENER_IO,
   PCONNECTION_IO,
   RAW_CONNECTION_IO,
-  TIMER
+  TIMER,
+  NAME_LOOKUP_EPOLL  /* Inner epoll for async name lookup (e.g. c-ares) */
 } epoll_type_t;
 
 // Data to use with epoll.
@@ -78,7 +79,8 @@ typedef enum {
   PCONNECTION,
   LISTENER,
   RAW_CONNECTION,
-  TIMER_MANAGER
+  TIMER_MANAGER,
+  NAME_LOOKUP
 } task_type_t;
 
 typedef struct task_t {
@@ -142,9 +144,16 @@ typedef struct pni_timer_manager_t {
   bool sched_timeout;
 } pni_timer_manager_t;
 
+typedef struct pname_lookup_t {
+  task_t task;
+  epoll_extended_t epoll_name_lookup;
+  void *impl;   /* NULL for sync; for async: implementation context */
+} pname_lookup_t;
+
 struct pn_proactor_t {
   task_t task;
   pni_timer_manager_t timer_manager;
+  pname_lookup_t name_lookup;
   epoll_extended_t epoll_schedule;     /* ready list */
   epoll_extended_t epoll_interrupt;
   pn_event_batch_t batch;
@@ -364,7 +373,7 @@ bool proactor_remove(task_t *tsk);
 bool unassign_thread(pn_proactor_t *p, tslot_t *ts, tslot_state new_state, tslot_t **resume_thread);
 
 void task_init(task_t *tsk, task_type_t t, pn_proactor_t *p);
-static void task_finalize(task_t* tsk) {
+static inline void task_finalize(task_t* tsk) {
   pmutex_finalize(&tsk->mutex);
 }
 
@@ -377,7 +386,6 @@ bool start_polling(epoll_extended_t *ee, int epollfd);
 void stop_polling(epoll_extended_t *ee, int epollfd);
 void rearm_polling(epoll_extended_t *ee, int epollfd);
 
-int pgetaddrinfo(const char *host, const char *port, int flags, struct addrinfo **res);
 void configure_socket(int sock);
 
 accepted_t *listener_accepted_next(pn_listener_t *listener);

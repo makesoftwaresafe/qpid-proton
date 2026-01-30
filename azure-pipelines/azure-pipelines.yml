@@ -36,7 +36,7 @@ jobs:
   steps:
   - script: |
       sudo apt-get update
-      sudo apt-get install -y swig libpython3-dev libsasl2-dev libjsoncpp-dev
+      sudo apt-get install -y swig libpython3-dev libsasl2-dev libjsoncpp-dev libc-ares-dev
     name: InstallExtraStuff
   - template: steps.yml
 - job: MacOS

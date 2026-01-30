@@ -22,6 +22,7 @@
 /* This is currently epoll implementation specific - and will need changing for the other proactors */
 
 #include "epoll-internal.h"
+#include "epoll_name_lookup.h"
 #include "proactor-internal.h"
 #include "raw_connection-internal.h"
 
@@ -139,6 +140,31 @@ static void praw_connection_maybe_connect_lh(praw_connection_t *prc) {
   prc->disconnected = true;
 }
 
+/* Called when raw connection name lookup completes (from name_lookup done_cb). Call with task lock held. */
+static void raw_connection_lookup_done_lh(praw_connection_t *prc, struct addrinfo *ai, int gai_error) {
+  pn_proactor_t *p = prc->task.proactor;
+  bool notify = false;
+  if (gai_error) {
+    psocket_gai_error(prc, gai_error, "connect to ", prc->taddr);
+  } else if (ai) {
+    prc->addrinfo = ai;
+    prc->ai = ai;
+    praw_connection_maybe_connect_lh(prc);
+    if (prc->psocket.epoll_io.fd != -1 && !pni_task_wake_pending(&prc->task)) {
+      return;
+    }
+  }
+  notify = schedule(&prc->task);
+  if (notify) notify_poller(p);
+}
+
+static void raw_connection_done_cb(void *user_data, struct addrinfo *ai, int gai_error) {
+  praw_connection_t *prc = (praw_connection_t *)user_data;
+  lock(&prc->task.mutex);
+  raw_connection_lookup_done_lh(prc, ai, gai_error);
+  unlock(&prc->task.mutex);
+}
+
 //
 // Raw socket API
 //
@@ -203,24 +229,16 @@ pn_raw_connection_t *pn_raw_connection(void) {
 static bool praw_connection_first_connect_lh(praw_connection_t *prc) {
   const char *host;
   const char *port;
+  pn_proactor_t *p = prc->task.proactor;
 
   unlock(&prc->task.mutex);
   size_t addrlen = strlen(prc->taddr);
   char *addr_buf = (char*) alloca(addrlen+1);
   pni_parse_addr(prc->taddr, addr_buf, addrlen+1, &host, &port);
-  // TODO: move this step to a separate worker thread that scales in response to multiple blocking DNS lookups.
-  int gai_error = pgetaddrinfo(host, port, 0, &prc->addrinfo);
+  bool rc = pni_name_lookup_start(&p->name_lookup, host, port, prc, raw_connection_done_cb);
   lock(&prc->task.mutex);
 
-  if (!gai_error) {
-    prc->ai = prc->addrinfo;
-    praw_connection_maybe_connect_lh(prc); /* Start connection attempts */
-    if (prc->psocket.epoll_io.fd != -1 && !pni_task_wake_pending(&prc->task))
-      return true;
-  } else {
-    psocket_gai_error(prc, gai_error, "connect to ", prc->taddr);
-  }
-  return false;
+  return rc;
 }
 
 void pn_proactor_raw_connect(pn_proactor_t *p, pn_raw_connection_t *rc, const char *addr) {

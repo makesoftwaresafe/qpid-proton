@@ -33,7 +33,6 @@
 #include <proton/transport.h>
 
 #include <string.h>
-
 #include <filesystem>
 
 using namespace pn_test;
@@ -143,6 +142,77 @@ TEST_CASE("proactor_connect") {
   p.connect(l);
   REQUIRE_RUN(p, PN_TRANSPORT_CLOSED);
   REQUIRE_RUN(p, PN_TRANSPORT_CLOSED);
+}
+
+/* Connect using hostname "localhost" explicitly - exercises name resolution. */
+TEST_CASE("proactor_connect_localhost") {
+  close_on_open_handler h;
+  proactor p(&h);
+  pn_listener_t *l = p.listen(":0", &h);
+  REQUIRE_RUN(p, PN_LISTENER_OPEN);
+  p.connect("localhost:" + listening_port(l));
+  REQUIRE_RUN(p, PN_TRANSPORT_CLOSED);
+  REQUIRE_RUN(p, PN_TRANSPORT_CLOSED);
+}
+
+/* Close a connection before it has opened - verify clean shutdown. */
+TEST_CASE("proactor_connect_close_before_open") {
+  struct handler : public close_on_open_handler {
+    bool transport_closed_ = false;
+    bool listener_close_ = false;
+    bool proactor_inactive_ = false;
+    bool handle(pn_event_t *e) override {
+      // Override the parent handler so we can note the events
+      // but just run to the end of the batch.
+      switch (pn_event_type(e)) {
+      case PN_TRANSPORT_ERROR:
+        return false;
+      case PN_TRANSPORT_CLOSED:
+        transport_closed_ = true;
+        return false;
+      case PN_LISTENER_CLOSE:
+        listener_close_ = true;
+        return false;
+      case PN_PROACTOR_INACTIVE:
+        proactor_inactive_ = true;
+        return false;
+      default:
+        return common_handler::handle(e);
+      }
+    }
+  } h;
+  proactor p(&h);
+  pn_listener_t *l = p.listen();
+  REQUIRE_RUN(p, PN_LISTENER_OPEN);
+  pn_connection_t *c = p.connect("localhost:" + listening_port(l), &h);
+  REQUIRE(c != nullptr);
+  pn_connection_close(c);
+  pn_listener_close(l);
+  REQUIRE_RUN(p, PN_PROACTOR_INACTIVE);
+  REQUIRE(h.transport_closed_);
+  REQUIRE(h.listener_close_);
+  REQUIRE(h.proactor_inactive_);
+}
+
+/* Failing name lookup - connect to invalid hostname. */
+TEST_CASE("proactor_name_lookup_fails") {
+  common_handler h;
+  proactor p(&h);
+  p.connect("nosuch.example.invalid:");
+  REQUIRE_RUN(p, PN_TRANSPORT_ERROR);
+  CHECK_THAT(*h.last_condition, cond_matches("proton:io", "nosuch"));
+  REQUIRE_RUN(p, PN_TRANSPORT_CLOSED);
+}
+
+/* Interrupt a connection during a lookup that will fail - verify clean shutdown. */
+TEST_CASE("proactor_name_lookup_interrupted") {
+  common_handler h;
+  proactor p(&h);
+  pn_connection_t *c = p.connect("nosuch.example.com:", &h);
+  REQUIRE(c != nullptr);
+  pn_connection_close(c);
+  REQUIRE_RUN(p, PN_TRANSPORT_ERROR);
+  REQUIRE_RUN(p, PN_PROACTOR_INACTIVE);
 }
 
 namespace {
@@ -318,13 +388,13 @@ TEST_CASE("proactor_errors") {
   REQUIRE_RUN(p, PN_PROACTOR_INACTIVE);
 
   /* Invalid connect/listen host name */
-  p.connect("nosuch.example.com:");
+  p.connect("nosuch.example.invalid:");
   REQUIRE_RUN(p, PN_TRANSPORT_ERROR);
   CHECK_THAT(*h.last_condition, cond_matches("proton:io", "nosuch"));
   REQUIRE_RUN(p, PN_TRANSPORT_CLOSED);
   REQUIRE_RUN(p, PN_PROACTOR_INACTIVE);
 
-  pn_proactor_listen(p, pn_listener(), "nosuch.example.com:", 1);
+  pn_proactor_listen(p, pn_listener(), "nosuch.example.invalid:", 1);
   REQUIRE_RUN(p, PN_LISTENER_CLOSE);
   CHECK_THAT(*h.last_condition, cond_matches("proton:io", "nosuch"));
   REQUIRE_RUN(p, PN_PROACTOR_INACTIVE);
