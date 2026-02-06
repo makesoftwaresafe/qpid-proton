@@ -273,7 +273,7 @@ class stop_reconnect_tester : public proton::messaging_handler {
 
     void on_container_start(proton::container &c) override {
         proton::reconnect_options reconnect_options;
-        c.connect("this-is-not-going-to work.com", proton::connection_options().reconnect(reconnect_options));
+        c.connect("this-is-not-going-to work.invalid", proton::connection_options().reconnect(reconnect_options));
         c.schedule(proton::duration::SECOND, proton::make_work(&stop_reconnect_tester::deferred_stop, this));
     }
 
@@ -381,32 +381,32 @@ public:
     void on_container_start(proton::container &c) override {
         // Never actually connects, keeps re-trying to bogus hostnames with
         // changing options.
-        c.connect("nosuchhost0",
+        c.connect("nosuchhost0.invalid",
                   copts()
                   .reconnect(ropts())
                   .virtual_host("vhost0")
                   .user("user0")
-                  .reconnect_url("hahaha1"));
+                  .reconnect_url("hahaha1.invalid"));
     }
 
     void on_transport_error(proton::transport &t) override {
         switch (++errors_) {
         case 1:
-            ASSERT_SUBSTRING("nosuchhost0", t.error().what()); // First failure
+            ASSERT_SUBSTRING("nosuchhost0.invalid", t.error().what()); // First failure
             break;
         case 2: {
-            ASSERT_SUBSTRING("hahaha1",t.error().what()); // Second failure
+            ASSERT_SUBSTRING("hahaha1.invalid",t.error().what()); // Second failure
             ASSERT_EQUAL("user0", t.connection().user());
             break;
         }
         case 3:
-            ASSERT_SUBSTRING("hahaha1", t.error().what()); // Still trying reconnect url
-            t.connection().update_options(copts().reconnect_url("nosuchhost1"));
+            ASSERT_SUBSTRING("hahaha1.invalid", t.error().what()); // Still trying reconnect url
+            t.connection().update_options(copts().reconnect_url("nosuchhost1.invalid"));
             // Verify changing reconnect options does not affect other options.
             ASSERT_EQUAL("user0", t.connection().user());
             break;
         case 4:
-            ASSERT_SUBSTRING("nosuchhost1", t.error().what()); // Re-try new reconnect url
+            ASSERT_SUBSTRING("nosuchhost1.invalid", t.error().what()); // Re-try new reconnect url
             break;
         default:
             t.connection().container().stop();
@@ -436,18 +436,18 @@ public:
     void on_container_start(proton::container &c) override {
         // Never actually connects, keeps re-trying to bogus hostnames with
         // changing options.
-        c.connect("nosuchhost0", copts().reconnect(ropts()).virtual_host("vhost0").user("user0"));
+        c.connect("nosuchhost0.invalid", copts().reconnect(ropts()).virtual_host("vhost0").user("user0"));
     }
 
     void on_transport_error(proton::transport &t) override {
         switch (++errors_) {
         case 1:
-            ASSERT_SUBSTRING("nosuchhost0", t.error().what()); // First failure
+            ASSERT_SUBSTRING("nosuchhost0.invalid", t.error().what()); // First failure
             break;
         case 2: {
-            ASSERT_SUBSTRING("nosuchhost0",t.error().what()); // Second failure
+            ASSERT_SUBSTRING("nosuchhost0.invalid",t.error().what()); // Second failure
             std::vector<std::string> urls;
-            urls.push_back("nosuchhost1");
+            urls.push_back("nosuchhost1.invalid");
             // Update the failover list
             t.connection().update_options(copts().failover_urls(urls));
             // Verify changing reconnect options does not affect other options.
@@ -455,16 +455,16 @@ public:
             break;
         }
         case 3:
-            ASSERT_SUBSTRING("nosuchhost1", t.error().what()); // Using failover host
+            ASSERT_SUBSTRING("nosuchhost1.invalid", t.error().what()); // Using failover host
             // Change a non-reconnect option should not affect reconnect
             t.connection().update_options(copts().user("user1"));
             break;
         case 4:
-            ASSERT_SUBSTRING("nosuchhost0", t.error().what()); // Back to original url
+            ASSERT_SUBSTRING("nosuchhost0.invalid", t.error().what()); // Back to original url
             ASSERT_EQUAL("user1", t.connection().user());
             break;
         case 5:
-            ASSERT_SUBSTRING("nosuchhost1", t.error().what()); // Still have failover
+            ASSERT_SUBSTRING("nosuchhost1.invalid", t.error().what()); // Still have failover
             break;
         default:
             t.connection().container().stop();
@@ -493,40 +493,40 @@ public:
     void on_container_start(proton::container &c) override {
         // Never actually connects, keeps re-trying to bogus hostnames with
         // changing options.
-        c.connect("nosuchhost0", copts().reconnect(ropts()).virtual_host("vhost0").user("user0"));
+        c.connect("nosuchhost0.invalid", copts().reconnect(ropts()).virtual_host("vhost0").user("user0"));
     }
 
     void on_transport_error(proton::transport &t) override {
         switch (++errors_) {
         case 1:
-            ASSERT_SUBSTRING("nosuchhost0", t.error().what()); // First failure
+            ASSERT_SUBSTRING("nosuchhost0.invalid", t.error().what()); // First failure
             break;
         case 2: {
-            ASSERT_SUBSTRING("nosuchhost0",t.error().what()); // Second failure
-            t.connection().update_options(copts().reconnect_url("nosuchhost1"));
+            ASSERT_SUBSTRING("nosuchhost0.invalid",t.error().what()); // Second failure
+            t.connection().update_options(copts().reconnect_url("nosuchhost1.invalid"));
             // Verify changing reconnect options does not affect other options.
             ASSERT_EQUAL("user0", t.connection().user());
             break;
         }
         case 3:
-            ASSERT_SUBSTRING("nosuchhost1", t.error().what()); // Re-try original
-            t.connection().update_options(copts().reconnect_url("notsuchahostatall"));
+            ASSERT_SUBSTRING("nosuchhost1.invalid", t.error().what()); // Re-try original
+            t.connection().update_options(copts().reconnect_url("notsuchahostatall.invalid"));
             break;
         case 4:
-            ASSERT_SUBSTRING("notsuchahostatall", t.error().what()); // Re-try new reconnect url
+            ASSERT_SUBSTRING("notsuchahostatall.invalid", t.error().what()); // Re-try new reconnect url
             break;
         case 5:
-            ASSERT_SUBSTRING("notsuchahostatall", t.error().what()); // Re-try new reconnect url
+            ASSERT_SUBSTRING("notsuchahostatall.invalid", t.error().what()); // Re-try new reconnect url
             // Change a non-reconnect option should not affect reconnect
             t.connection().update_options(copts().user("user1"));
             break;
         case 6:
-            ASSERT_SUBSTRING("notsuchahostatall", t.error().what()); // Same reconnect url
+            ASSERT_SUBSTRING("notsuchahostatall.invalid", t.error().what()); // Same reconnect url
             ASSERT_EQUAL("user1", t.connection().user());
-            t.connection().update_options(copts().reconnect_url("nosuchhost1"));
+            t.connection().update_options(copts().reconnect_url("nosuchhost1.invalid"));
             break;
         case 7:
-            ASSERT_SUBSTRING("nosuchhost1", t.error().what());
+            ASSERT_SUBSTRING("nosuchhost1.invalid", t.error().what());
             break;
         default:
             t.connection().container().stop();
