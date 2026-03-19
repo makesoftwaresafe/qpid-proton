@@ -193,6 +193,10 @@ PN_EXTERN int            pn_message_set_priority          (pn_message_t *msg, ui
  * dead. Once a message is considered dead it may be dropped. Use
  * ::pn_message_set_ttl() to set the ttl for a message.
  *
+ * In this API a value of zero for the ttl means that the message has
+ * no ttl and never expires. If the ttl is never set on a message this
+ * will be the default value for the ttl.
+ *
  * @param[in] msg a message object
  * @return the ttl in milliseconds
  */

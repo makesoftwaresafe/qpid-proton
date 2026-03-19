@@ -37,6 +37,7 @@ from ._common import millis2secs, secs2millis
 from ._data import char, Data, symbol, ulong, AnnotationDict
 from ._endpoints import Link
 from ._exceptions import EXCEPTIONS, MessageException
+from math import inf
 from uuid import UUID
 from typing import Optional, Union, TYPE_CHECKING, overload
 
@@ -224,15 +225,18 @@ class Message:
     @property
     def ttl(self) -> float:
         """The time to live of the message measured in seconds. Expired messages
-        may be dropped.
+        may be dropped. A value of ``inf`` indicates that the message has no ttl and never expires.
 
         :raise: :exc:`MessageException` if there is any Proton error when using the setter.
         """
-        return millis2secs(pn_message_get_ttl(self._msg))
+        ttl = pn_message_get_ttl(self._msg)
+        if ttl == 0:
+            return inf
+        return millis2secs(ttl)
 
     @ttl.setter
-    def ttl(self, value: Union[float, int]) -> None:
-        self._check(pn_message_set_ttl(self._msg, secs2millis(value)))
+    def ttl(self, value: Union[float, int, None]) -> None:
+        self._check(pn_message_set_ttl(self._msg, secs2millis(0 if value is None or value == inf else value)))
 
     @property
     def first_acquirer(self) -> bool:

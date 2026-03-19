@@ -17,8 +17,9 @@
 # under the License.
 #
 
-from uuid import uuid4
+from math import inf
 from sys import version_info
+from uuid import uuid4
 
 from proton import Data, Message, MessageException, byte, char, decimal32, decimal64, decimal128, float32, int32, \
     short, symbol, timestamp, ubyte, uint, ulong, ushort
@@ -67,7 +68,7 @@ class AccessorsTest(Test):
         self._test("priority", Message.DEFAULT_PRIORITY, range(0, 255))
 
     def testTtl(self):
-        self._test("ttl", 0, range(12345, 54321))
+        self._test("ttl", inf, range(12345, 54321))
 
     def testFirstAcquirer(self):
         self._test("first_acquirer", False, (True, False))
