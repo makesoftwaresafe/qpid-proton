@@ -243,7 +243,7 @@ typedef struct pconnection_t {
   psocket_t psocket;
   pni_timer_t *timer;
   const char *host, *port;
-  uint32_t new_events;
+  uint32_t new_os_events;
   bool server;                /* accept, not connect */
   bool tick_pending;
   bool queued_disconnect;     /* deferred from pn_proactor_disconnect() */
@@ -352,7 +352,7 @@ static inline void pmutex_finalize(pthread_mutex_t *m) { pthread_mutex_destroy(m
 static inline void lock(pmutex *m) { pthread_mutex_lock(m); }
 static inline void unlock(pmutex *m) { pthread_mutex_unlock(m); }
 
-static inline bool pconnection_has_event(pconnection_t *pc) {
+static inline bool pconnection_has_pn_event(pconnection_t *pc) {
   return pn_connection_driver_has_event(&pc->driver);
 }
 
