@@ -980,12 +980,28 @@ static inline bool pconnection_wclosed(pconnection_t  *pc) {
    Never rearm(0 | EPOLLONESHOT), since this really means
    rearm(EPOLLHUP | EPOLLERR | EPOLLONESHOT) and leaves doubt that the
    EPOLL_CTL_DEL can prevent a parallel HUP/ERR error notification during
-   close/shutdown.  Let read()/write() return 0 or -1 to trigger cleanup logic.
+   close/shutdown.
+
+   Normally, let send()/recv() return 0 or -1 to trigger cleanup logic.
 */
 static int pconnection_rearm_check(pconnection_t *pc) {
   if ((pconnection_rclosed(pc) && pconnection_wclosed(pc)) || pc->psocket.epoll_io.fd == -1) {
     return 0;
+  } else if (pc->disconnected) {
+    // Transport not closed, yet IO not possible.  Skip another epoll since it will return
+    // immediately.  PROTON-2930: either send/recv not called or no error (i.e. EAGAIN).
+    int soerr;
+    socklen_t soerrlen = sizeof(soerr);
+    int ec = getsockopt(pc->psocket.epoll_io.fd, SOL_SOCKET, SO_ERROR, &soerr, &soerrlen);
+    if (ec || !soerr) {
+      soerr = ENOTCONN;
+    }
+    // Force transport closure.
+    psocket_error(&pc->psocket, soerr, pc->connected ? "disconnected" : "on connect");
+    schedule(&pc->task); // unassign_thread handles notify_poller requirement.
+    return 0;
   }
+
   uint32_t wanted_now = (pc->read_blocked && !pconnection_rclosed(pc)) ? EPOLLIN : 0;
   if (!pconnection_wclosed(pc)) {
     if (pc->write_blocked)
