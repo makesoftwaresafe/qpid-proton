@@ -125,6 +125,13 @@ PN_EXTERN uint64_t pn_disposition_type(pn_disposition_t *disposition);
 PN_EXTERN const char *pn_disposition_type_name(uint64_t disposition_type);
 
 /**
+ * Clear a disposition.
+ *
+ * @param[in] disposition a disposition object
+ */
+PN_EXTERN void pn_disposition_clear(pn_disposition_t *disposition);
+
+/**
  * Access the condition object associated with a disposition.
  *
  * The ::pn_condition_t object retrieved by this operation may be
