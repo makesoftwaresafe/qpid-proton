@@ -22,6 +22,7 @@
  *
  */
 
+#include "./binary.hpp"
 #include "./fwd.hpp"
 #include "./internal/export.hpp"
 #include "./internal/object.hpp"
@@ -77,6 +78,9 @@ class transfer : public internal::object<pn_delivery_t> {
     /// Return true if the transfer has been settled.
     PN_CPP_EXTERN bool settled() const;
 
+    /// Return the tag for this transfer.
+    PN_CPP_EXTERN binary tag() const;
+
     /// Set user data on this transfer.
     PN_CPP_EXTERN void user_data(void* user_data) const;
 
@@ -88,11 +92,18 @@ class transfer : public internal::object<pn_delivery_t> {
     /// @endcond
 };
 
-/// Human-readalbe name of the transfer::state
+/// Human-readable name of the transfer::state
 PN_CPP_EXTERN std::string to_string(enum transfer::state);
-/// Human-readalbe name of the transfer::state
+/// Human-readable name of the transfer::state
 PN_CPP_EXTERN std::ostream& operator<<(std::ostream&, const enum transfer::state);
 
 } // proton
+
+/// Specialize std::hash so we can use proton::transfer as a key for unordered datastructures
+template <> struct std::hash<proton::transfer> {
+  std::size_t operator()(const proton::transfer& k) const {
+      return std::hash<proton::binary>{}(k.tag());
+  }
+};
 
 #endif // PROTON_TRANSFER_HPP
